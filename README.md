@@ -57,11 +57,13 @@ Use `crosshair.exe` for normal 64-bit Windows. If `crosshair-x86.exe` exists, ke
 
 - `Ctrl+Alt+S` opens the fullscreen overlay editor.
 
-The overlay editor appears as a borderless topmost layer over the screen with a transparent background, so it feels closer to Steam/Xbox-style overlays than a normal app window. Press `Esc` to close it.
+The overlay editor appears as a borderless topmost HUD with a transparent black backdrop, rounded floating panels, and rounded action buttons spread across the screen, closer to a Steam/Xbox-style overlay than a normal app window. Drag a panel background to move it. Press `Esc` or `Hide` to close the editor, or use `Exit` to close the whole app.
 
 The editor customizes length, gap, thickness, opacity, position offset, full RGB color, center dot, outline, and visibility. Sliders and typed number boxes stay synced, so you can drag quickly or enter exact values.
 
 The preset dropdown applies complete crosshair styles, including shape, opacity, RGB color, dot, outline, and offset. Settings are saved automatically.
+
+Use `Save preset` to store the current crosshair as a custom preset. Select a custom preset and use `Remove` to delete it.
 
 You can also right-click the tray icon for common actions and exit.
 
@@ -69,6 +71,6 @@ You can also right-click the tray icon for common actions and exit.
 
 The app checks `VKnubis/crossair` on GitHub in the background when it starts. It only shows a popup if it finds a newer release or version tag.
 
-You can manually check from the tray menu or the `Updates` button in settings. Publish GitHub releases or tags like `v1.0.1` for the checker to recommend updates.
+You can manually check from the tray menu or the `Updates` button in settings. When a newer release includes a `.exe` asset, the updater can download it, close the running app, replace the current executable, and restart Crosshair automatically. Publish GitHub releases or tags like `v1.0.1` for the checker to recommend updates.
 
 Use overlays only in apps and games where they are allowed.

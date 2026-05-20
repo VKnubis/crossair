@@ -9,6 +9,7 @@
 #endif
 
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <wininet.h>
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cwctype>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,18 +46,29 @@ constexpr int kMaxOpacity = 100;
 constexpr int kMinOffset = -200;
 constexpr int kMaxOffset = 200;
 
-constexpr int kSettingsClientWidth = 620;
-constexpr int kSettingsClientHeight = 680;
 constexpr int kSettingsOverlayMargin = 24;
 
-constexpr COLORREF kSettingsBackground = RGB(18, 20, 24);
-constexpr COLORREF kSettingsPanel = RGB(28, 31, 37);
-constexpr COLORREF kSettingsPanelLight = RGB(38, 42, 50);
+constexpr COLORREF kSettingsBackground = RGB(6, 8, 12);
+constexpr COLORREF kSettingsPanel = RGB(29, 33, 40);
+constexpr COLORREF kSettingsPanelLight = RGB(49, 55, 66);
 constexpr COLORREF kSettingsText = RGB(238, 242, 247);
 constexpr COLORREF kSettingsMutedText = RGB(158, 169, 182);
+constexpr COLORREF kSettingsBorder = RGB(79, 88, 103);
+
+#ifndef TBM_SETBKCOLOR
+constexpr UINT TBM_SETBKCOLOR = WM_USER + 19;
+#endif
+#ifndef TBM_SETCHANNELCOLOR
+constexpr UINT TBM_SETCHANNELCOLOR = WM_USER + 20;
+#endif
+#ifndef TBM_SETTHUMBCOLOR
+constexpr UINT TBM_SETTHUMBCOLOR = WM_USER + 21;
+#endif
 
 enum class HotkeyId : int {
-    Settings = 1,
+    OpenSettings = 1,
+    CloseSettings,
+    BackupOpenSettings,
 };
 
 enum class MenuId : int {
@@ -85,16 +98,25 @@ enum class ControlId : int {
     OffsetXEdit,
     OffsetYTrack,
     OffsetYEdit,
+    RedTrack,
     RedEdit,
+    GreenTrack,
     GreenEdit,
+    BlueTrack,
     BlueEdit,
     ColorSwatch,
     DotCheck,
     OutlineCheck,
     VisibleCheck,
+    OpenHotkeyEdit,
+    CloseHotkeyEdit,
+    BackupHotkeyEdit,
     ResetButton,
     CheckUpdateButton,
     CloseButton,
+    ExitButton,
+    SavePresetButton,
+    RemovePresetButton,
 };
 
 struct CrosshairSettings {
@@ -130,6 +152,7 @@ struct UpdateInfo {
     std::wstring latestVersion;
     std::wstring details;
     std::wstring updateUrl = kReleasesUrl;
+    std::wstring downloadUrl;
     bool manual = false;
 };
 
@@ -153,13 +176,42 @@ struct SettingsControls {
     HWND offsetXEdit = nullptr;
     HWND offsetYTrack = nullptr;
     HWND offsetYEdit = nullptr;
+    HWND redTrack = nullptr;
     HWND redEdit = nullptr;
+    HWND greenTrack = nullptr;
     HWND greenEdit = nullptr;
+    HWND blueTrack = nullptr;
     HWND blueEdit = nullptr;
     HWND colorSwatch = nullptr;
     HWND dotCheck = nullptr;
     HWND outlineCheck = nullptr;
     HWND visibleCheck = nullptr;
+    HWND openHotkeyEdit = nullptr;
+    HWND closeHotkeyEdit = nullptr;
+    HWND backupHotkeyEdit = nullptr;
+};
+
+struct LayoutItem {
+    HWND hwnd = nullptr;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+struct HotkeyCombo {
+    UINT modifiers = MOD_CONTROL | MOD_ALT;
+    UINT vk = 0;
+};
+
+enum class OverlayPanel {
+    None,
+    Title,
+    Presets,
+    Shape,
+    Color,
+    Options,
+    Actions,
 };
 
 HINSTANCE g_instance = nullptr;
@@ -168,29 +220,35 @@ HWND g_settingsWindow = nullptr;
 HWND g_previewWindow = nullptr;
 SettingsControls g_controls;
 CrosshairSettings g_settings;
-POINT g_settingsOrigin{0, 0};
+HotkeyCombo g_openHotkey{MOD_CONTROL | MOD_ALT, 'S'};
+HotkeyCombo g_closeHotkey{MOD_CONTROL | MOD_ALT, 'H'};
+HWND g_hotkeyCaptureEdit = nullptr;
 bool g_updatingControls = false;
 bool g_updateCheckRunning = false;
+std::vector<LayoutItem> g_layoutItems;
+std::vector<std::wstring> g_customPresetNames;
+std::vector<CrosshairSettings> g_customPresets;
+POINT g_titleOffset{0, 0};
+POINT g_presetOffset{0, 0};
+POINT g_shapeOffset{0, 0};
+POINT g_colorOffset{0, 0};
+POINT g_optionOffset{0, 0};
+POINT g_actionOffset{0, 0};
+OverlayPanel g_dragPanel = OverlayPanel::None;
+POINT g_dragStart{0, 0};
+POINT g_dragStartOffset{0, 0};
 
 HBRUSH g_settingsBackgroundBrush = CreateSolidBrush(kSettingsBackground);
 HBRUSH g_settingsPanelBrush = CreateSolidBrush(kSettingsPanel);
 HBRUSH g_settingsEditBrush = CreateSolidBrush(kSettingsPanelLight);
 
-const std::array<CrosshairPreset, 9> kPresets = {
-    CrosshairPreset{L"Classic Green", CrosshairSettings{18, 5, 2, 100, 0, 0, 0, 255, 128, true, true, true}},
-    CrosshairPreset{L"Clean White", CrosshairSettings{16, 4, 2, 92, 0, 0, 255, 255, 255, false, true, true}},
-    CrosshairPreset{L"Tiny Dot", CrosshairSettings{4, 0, 3, 100, 0, 0, 255, 255, 255, true, true, true}},
-    CrosshairPreset{L"Wide Cyan", CrosshairSettings{28, 8, 2, 96, 0, 0, 45, 220, 255, true, true, true}},
-    CrosshairPreset{L"Thick Red", CrosshairSettings{22, 5, 4, 100, 0, 0, 255, 58, 58, false, true, true}},
-    CrosshairPreset{L"High Vis Yellow", CrosshairSettings{24, 7, 3, 100, 0, 0, 255, 230, 64, true, true, true}},
-    CrosshairPreset{L"Pink Dotline", CrosshairSettings{13, 3, 2, 90, 0, 0, 255, 88, 210, true, false, true}},
-    CrosshairPreset{L"Blue Offset", CrosshairSettings{18, 6, 2, 92, 0, -18, 90, 150, 255, true, true, true}},
-    CrosshairPreset{L"Orange Sniper", CrosshairSettings{34, 12, 2, 88, 0, 0, 255, 150, 48, false, true, true}},
-};
+const std::array<CrosshairPreset, 0> kPresets = {};
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK PreviewProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+bool RegisterHotkeys(HWND hwnd);
+void UnregisterHotkeys(HWND hwnd);
 
 HFONT UiFont() {
     return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -217,6 +275,31 @@ std::wstring Utf8ToWide(const std::string& text) {
     std::wstring wide(static_cast<size_t>(length), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
     return wide;
+}
+
+std::string WideToUtf8(const std::wstring& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    const int length = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (length <= 0) {
+        return {};
+    }
+
+    std::string utf8(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(), length, nullptr, nullptr);
+    return utf8;
+}
+
+std::wstring Lowercase(std::wstring text) {
+    for (wchar_t& ch : text) {
+        if (ch >= L'A' && ch <= L'Z') {
+            ch = static_cast<wchar_t>(ch - L'A' + L'a');
+        }
+    }
+
+    return text;
 }
 
 std::string ExtractJsonString(const std::string& json, const std::string& key) {
@@ -253,6 +336,79 @@ std::string ExtractJsonString(const std::string& json, const std::string& key) {
     }
 
     return value;
+}
+
+std::vector<std::string> ExtractJsonStrings(const std::string& json, const std::string& key) {
+    std::vector<std::string> values;
+    const std::string token = "\"" + key + "\"";
+    size_t searchStart = 0;
+
+    while (true) {
+        size_t position = json.find(token, searchStart);
+        if (position == std::string::npos) {
+            break;
+        }
+
+        position = json.find(':', position + token.size());
+        if (position == std::string::npos) {
+            break;
+        }
+
+        position = json.find('"', position + 1);
+        if (position == std::string::npos) {
+            break;
+        }
+
+        std::string value;
+        bool escaped = false;
+        for (++position; position < json.size(); ++position) {
+            const char ch = json[position];
+            if (escaped) {
+                value.push_back(ch);
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                break;
+            } else {
+                value.push_back(ch);
+            }
+        }
+
+        values.push_back(value);
+        searchStart = position + 1;
+    }
+
+    return values;
+}
+
+std::wstring PreferredDownloadUrl(const std::string& releaseJson) {
+    std::wstring fallback;
+
+    for (const std::string& value : ExtractJsonStrings(releaseJson, "browser_download_url")) {
+        const std::wstring url = Utf8ToWide(value);
+        const std::wstring lowerUrl = Lowercase(url);
+        if (lowerUrl.find(L".exe") == std::wstring::npos) {
+            continue;
+        }
+
+        const bool isX86 = lowerUrl.find(L"x86") != std::wstring::npos;
+#ifdef _WIN64
+        if (!isX86) {
+            return url;
+        }
+#else
+        if (isX86) {
+            return url;
+        }
+#endif
+
+        if (fallback.empty()) {
+            fallback = url;
+        }
+    }
+
+    return fallback;
 }
 
 std::vector<int> VersionParts(const std::wstring& version) {
@@ -349,15 +505,98 @@ std::string HttpGet(const wchar_t* url, DWORD& statusCode, std::wstring& error) 
     return body;
 }
 
+bool DownloadFile(const std::wstring& url, const std::wstring& path, std::wstring& error) {
+    error.clear();
+
+    HINTERNET session = InternetOpenW(
+        L"CppCrosshairUpdater/1.0",
+        INTERNET_OPEN_TYPE_PRECONFIG,
+        nullptr,
+        nullptr,
+        0);
+    if (!session) {
+        error = L"Could not initialize the internet session.";
+        return false;
+    }
+
+    DWORD timeout = 15000;
+    InternetSetOptionW(session, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    InternetSetOptionW(session, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+
+    HINTERNET request = InternetOpenUrlW(
+        session,
+        url.c_str(),
+        nullptr,
+        0,
+        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE,
+        0);
+    if (!request) {
+        InternetCloseHandle(session);
+        error = L"Could not download the update file.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    if (HttpQueryInfoW(request, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, nullptr) &&
+        statusCode >= 400) {
+        InternetCloseHandle(request);
+        InternetCloseHandle(session);
+        error = L"GitHub returned HTTP " + std::to_wstring(statusCode) + L" while downloading the update.";
+        return false;
+    }
+
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        InternetCloseHandle(request);
+        InternetCloseHandle(session);
+        error = L"Could not create the temporary update file.";
+        return false;
+    }
+
+    char buffer[8192]{};
+    DWORD bytesRead = 0;
+    bool ok = true;
+    while (true) {
+        if (!InternetReadFile(request, buffer, sizeof(buffer), &bytesRead)) {
+            ok = false;
+            error = L"The update download was interrupted.";
+            break;
+        }
+
+        if (bytesRead == 0) {
+            break;
+        }
+
+        DWORD bytesWritten = 0;
+        if (!WriteFile(file, buffer, bytesRead, &bytesWritten, nullptr) || bytesWritten != bytesRead) {
+            ok = false;
+            error = L"Could not write the downloaded update file.";
+            break;
+        }
+    }
+
+    if (!ok) {
+        DeleteFileW(path.c_str());
+    }
+
+    CloseHandle(file);
+    InternetCloseHandle(request);
+    InternetCloseHandle(session);
+    return ok;
+}
+
 UpdateInfo BuildUpdateInfo(
     const std::wstring& latestVersion,
     const std::wstring& updateUrl,
+    const std::wstring& downloadUrl,
     const std::wstring& source,
     bool manual) {
     UpdateInfo info;
     info.manual = manual;
     info.latestVersion = latestVersion;
     info.updateUrl = updateUrl.empty() ? kReleasesUrl : updateUrl;
+    info.downloadUrl = downloadUrl;
     info.details = source;
     info.status = IsRemoteVersionNewer(kAppVersion, latestVersion)
         ? UpdateStatus::UpdateAvailable
@@ -373,8 +612,9 @@ UpdateInfo CheckForUpdates(bool manual) {
     if (statusCode == 200) {
         const std::wstring tag = Utf8ToWide(ExtractJsonString(body, "tag_name"));
         const std::wstring url = Utf8ToWide(ExtractJsonString(body, "html_url"));
+        const std::wstring downloadUrl = PreferredDownloadUrl(body);
         if (!tag.empty()) {
-            return BuildUpdateInfo(tag, url, L"GitHub latest release", manual);
+            return BuildUpdateInfo(tag, url, downloadUrl, L"GitHub latest release", manual);
         }
     } else if (statusCode != 404 && statusCode != 0) {
         UpdateInfo info;
@@ -394,7 +634,7 @@ UpdateInfo CheckForUpdates(bool manual) {
     if (statusCode == 200) {
         const std::wstring tag = Utf8ToWide(ExtractJsonString(body, "name"));
         if (!tag.empty()) {
-            return BuildUpdateInfo(tag, kReleasesUrl, L"GitHub tag fallback", manual);
+            return BuildUpdateInfo(tag, kReleasesUrl, L"", L"GitHub tag fallback", manual);
         }
 
         UpdateInfo info;
@@ -417,6 +657,89 @@ HWND MessageOwner() {
     return g_settingsWindow ? g_settingsWindow : g_window;
 }
 
+std::wstring ExePath() {
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
+    return path;
+}
+
+std::wstring TempUpdatePath(const wchar_t* fileName) {
+    wchar_t tempDir[MAX_PATH]{};
+    const DWORD length = GetTempPathW(ARRAYSIZE(tempDir), tempDir);
+    const std::wstring base = (length > 0 && length < ARRAYSIZE(tempDir)) ? tempDir : L".\\";
+    return base + fileName;
+}
+
+bool WriteTextFileUtf8(const std::wstring& path, const std::string& text) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD written = 0;
+    const bool ok = WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) != 0 &&
+        written == static_cast<DWORD>(text.size());
+    CloseHandle(file);
+    return ok;
+}
+
+bool ScheduleSelfUpdate(const std::wstring& downloadedExe, std::wstring& error) {
+    error.clear();
+
+    const std::wstring currentExe = ExePath();
+    const std::wstring scriptPath = TempUpdatePath(L"crosshair-update.cmd");
+    const DWORD pid = GetCurrentProcessId();
+
+    const std::wstring script =
+        L"@echo off\r\n"
+        L"setlocal\r\n"
+        L"set \"new=" + downloadedExe + L"\"\r\n"
+        L"set \"target=" + currentExe + L"\"\r\n"
+        L":wait\r\n"
+        L"tasklist /FI \"PID eq " + std::to_wstring(pid) + L"\" | find \"" + std::to_wstring(pid) + L"\" >nul\r\n"
+        L"if not errorlevel 1 (\r\n"
+        L"  timeout /t 1 /nobreak >nul\r\n"
+        L"  goto wait\r\n"
+        L")\r\n"
+        L"copy /Y \"%new%\" \"%target%\" >nul\r\n"
+        L"if errorlevel 1 (\r\n"
+        L"  start \"\" \"https://github.com/VKnubis/crossair/releases\"\r\n"
+        L"  exit /b 1\r\n"
+        L")\r\n"
+        L"start \"\" \"%target%\"\r\n"
+        L"del \"%new%\" >nul 2>nul\r\n"
+        L"del \"%~f0\" >nul 2>nul\r\n";
+
+    if (!WriteTextFileUtf8(scriptPath, WideToUtf8(script))) {
+        error = L"Could not create the updater script.";
+        return false;
+    }
+
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", scriptPath.c_str(), nullptr, nullptr, SW_HIDE);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        error = L"Could not start the updater script.";
+        return false;
+    }
+
+    return true;
+}
+
+bool InstallUpdate(const UpdateInfo& info, std::wstring& error) {
+    error.clear();
+
+    if (info.downloadUrl.empty()) {
+        error = L"The latest release does not include a downloadable .exe asset.";
+        return false;
+    }
+
+    const std::wstring downloadedExe = TempUpdatePath(L"crosshair-update-download.exe");
+    if (!DownloadFile(info.downloadUrl, downloadedExe, error)) {
+        return false;
+    }
+
+    return ScheduleSelfUpdate(downloadedExe, error);
+}
+
 void OpenUpdatePage(const std::wstring& url) {
     ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
@@ -432,10 +755,27 @@ void ShowUpdateResult(const UpdateInfo& info) {
             L"Current: " + info.currentVersion + L"\n"
             L"Latest: " + info.latestVersion + L"\n"
             L"Source: " + info.details + L"\n\n"
-            L"Open the GitHub releases page now?";
+            L"Download, replace this exe, and restart now?";
 
         if (MessageBoxW(MessageOwner(), message.c_str(), L"Crosshair Update", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
-            OpenUpdatePage(info.updateUrl);
+            std::wstring error;
+            if (InstallUpdate(info, error)) {
+                MessageBoxW(
+                    MessageOwner(),
+                    L"The update was downloaded. Crosshair will close, replace the exe, and restart.",
+                    L"Crosshair Update",
+                    MB_OK | MB_ICONINFORMATION);
+                DestroyWindow(g_window);
+                return;
+            }
+
+            const std::wstring failedMessage =
+                L"Automatic update failed.\n\n" +
+                (error.empty() ? L"Please download the latest release manually." : error) +
+                L"\n\nOpen the GitHub releases page?";
+            if (MessageBoxW(MessageOwner(), failedMessage.c_str(), L"Crosshair Update", MB_YESNO | MB_ICONWARNING) == IDYES) {
+                OpenUpdatePage(info.updateUrl);
+            }
         }
         return;
     }
@@ -535,9 +875,61 @@ int ReadSettingInt(const wchar_t* key, int defaultValue) {
     return static_cast<int>(GetPrivateProfileIntW(L"Crosshair", key, defaultValue, SettingsPath().c_str()));
 }
 
+int ReadProfileInt(const wchar_t* section, const wchar_t* key, int defaultValue) {
+    return static_cast<int>(GetPrivateProfileIntW(section, key, defaultValue, SettingsPath().c_str()));
+}
+
+std::wstring ReadProfileString(const wchar_t* section, const wchar_t* key, const wchar_t* defaultValue = L"") {
+    wchar_t text[256]{};
+    GetPrivateProfileStringW(section, key, defaultValue, text, ARRAYSIZE(text), SettingsPath().c_str());
+    return text;
+}
+
 void WriteSettingInt(const wchar_t* key, int value) {
     const std::wstring text = std::to_wstring(value);
     WritePrivateProfileStringW(L"Crosshair", key, text.c_str(), SettingsPath().c_str());
+}
+
+void WriteProfileInt(const wchar_t* section, const wchar_t* key, int value) {
+    const std::wstring text = std::to_wstring(value);
+    WritePrivateProfileStringW(section, key, text.c_str(), SettingsPath().c_str());
+}
+
+void WriteProfileString(const wchar_t* section, const wchar_t* key, const std::wstring& value) {
+    WritePrivateProfileStringW(section, key, value.c_str(), SettingsPath().c_str());
+}
+
+bool IsAllowedHotkeyVk(UINT vk) {
+    if (vk == VK_ESCAPE || vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL ||
+        vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+        vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU ||
+        vk == VK_LWIN || vk == VK_RWIN) {
+        return false;
+    }
+
+    return vk >= VK_BACK && vk <= 0xFE;
+}
+
+bool HotkeyCombosEqual(const HotkeyCombo& left, const HotkeyCombo& right) {
+    return left.modifiers == right.modifiers && left.vk == right.vk;
+}
+
+HotkeyCombo ReadHotkeyCombo(const wchar_t* modifiersKey, const wchar_t* vkKey, UINT defaultModifiers, UINT defaultVk) {
+    HotkeyCombo combo{defaultModifiers, defaultVk};
+    combo.modifiers = static_cast<UINT>(ReadSettingInt(modifiersKey, static_cast<int>(defaultModifiers))) &
+        (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+    combo.vk = static_cast<UINT>(ReadSettingInt(vkKey, static_cast<int>(defaultVk)));
+
+    if (!IsAllowedHotkeyVk(combo.vk)) {
+        combo.vk = defaultVk;
+    }
+
+    return combo;
+}
+
+void WriteHotkeyCombo(const wchar_t* modifiersKey, const wchar_t* vkKey, const HotkeyCombo& combo) {
+    WriteSettingInt(modifiersKey, static_cast<int>(combo.modifiers));
+    WriteSettingInt(vkKey, static_cast<int>(combo.vk));
 }
 
 void LoadSettings() {
@@ -555,6 +947,72 @@ void LoadSettings() {
     g_settings.showDot = ReadSettingInt(L"ShowDot", defaults.showDot ? 1 : 0) != 0;
     g_settings.outline = ReadSettingInt(L"Outline", defaults.outline ? 1 : 0) != 0;
     g_settings.visible = true;
+    g_openHotkey = ReadHotkeyCombo(L"OpenHotkeyModifiers", L"OpenHotkeyVk", MOD_CONTROL | MOD_ALT, 'S');
+    g_closeHotkey = ReadHotkeyCombo(L"CloseHotkeyModifiers", L"CloseHotkeyVk", MOD_CONTROL | MOD_ALT, 'H');
+}
+
+CrosshairSettings ReadPresetSettings(const wchar_t* section) {
+    CrosshairSettings settings;
+    settings.length = std::clamp(ReadProfileInt(section, L"Length", settings.length), kMinLength, kMaxLength);
+    settings.gap = std::clamp(ReadProfileInt(section, L"Gap", settings.gap), kMinGap, kMaxGap);
+    settings.thickness = std::clamp(ReadProfileInt(section, L"Thickness", settings.thickness), kMinThickness, kMaxThickness);
+    settings.opacity = std::clamp(ReadProfileInt(section, L"Opacity", settings.opacity), kMinOpacity, kMaxOpacity);
+    settings.offsetX = std::clamp(ReadProfileInt(section, L"OffsetX", settings.offsetX), kMinOffset, kMaxOffset);
+    settings.offsetY = std::clamp(ReadProfileInt(section, L"OffsetY", settings.offsetY), kMinOffset, kMaxOffset);
+    settings.red = std::clamp(ReadProfileInt(section, L"Red", settings.red), 0, 255);
+    settings.green = std::clamp(ReadProfileInt(section, L"Green", settings.green), 0, 255);
+    settings.blue = std::clamp(ReadProfileInt(section, L"Blue", settings.blue), 0, 255);
+    settings.showDot = ReadProfileInt(section, L"ShowDot", settings.showDot ? 1 : 0) != 0;
+    settings.outline = ReadProfileInt(section, L"Outline", settings.outline ? 1 : 0) != 0;
+    settings.visible = true;
+    return settings;
+}
+
+void WritePresetSettings(const wchar_t* section, const CrosshairSettings& settings) {
+    WriteProfileInt(section, L"Length", settings.length);
+    WriteProfileInt(section, L"Gap", settings.gap);
+    WriteProfileInt(section, L"Thickness", settings.thickness);
+    WriteProfileInt(section, L"Opacity", settings.opacity);
+    WriteProfileInt(section, L"OffsetX", settings.offsetX);
+    WriteProfileInt(section, L"OffsetY", settings.offsetY);
+    WriteProfileInt(section, L"Red", settings.red);
+    WriteProfileInt(section, L"Green", settings.green);
+    WriteProfileInt(section, L"Blue", settings.blue);
+    WriteProfileInt(section, L"ShowDot", settings.showDot ? 1 : 0);
+    WriteProfileInt(section, L"Outline", settings.outline ? 1 : 0);
+}
+
+void LoadCustomPresets() {
+    g_customPresetNames.clear();
+    g_customPresets.clear();
+
+    const int count = std::clamp(ReadProfileInt(L"CustomPresets", L"Count", 0), 0, 50);
+    for (int index = 0; index < count; ++index) {
+        const std::wstring section = L"CustomPreset" + std::to_wstring(index);
+        std::wstring name = ReadProfileString(section.c_str(), L"Name");
+        if (name.empty()) {
+            name = L"Custom " + std::to_wstring(index + 1);
+        }
+
+        g_customPresetNames.push_back(name);
+        g_customPresets.push_back(ReadPresetSettings(section.c_str()));
+    }
+}
+
+void SaveCustomPresets() {
+    const int oldCount = std::clamp(ReadProfileInt(L"CustomPresets", L"Count", 0), 0, 50);
+    WriteProfileInt(L"CustomPresets", L"Count", static_cast<int>(g_customPresets.size()));
+
+    for (size_t index = 0; index < g_customPresets.size(); ++index) {
+        const std::wstring section = L"CustomPreset" + std::to_wstring(index);
+        WriteProfileString(section.c_str(), L"Name", g_customPresetNames[index]);
+        WritePresetSettings(section.c_str(), g_customPresets[index]);
+    }
+
+    for (int index = static_cast<int>(g_customPresets.size()); index < oldCount; ++index) {
+        const std::wstring section = L"CustomPreset" + std::to_wstring(index);
+        WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, SettingsPath().c_str());
+    }
 }
 
 void SaveSettings() {
@@ -569,6 +1027,8 @@ void SaveSettings() {
     WriteSettingInt(L"Blue", g_settings.blue);
     WriteSettingInt(L"ShowDot", g_settings.showDot ? 1 : 0);
     WriteSettingInt(L"Outline", g_settings.outline ? 1 : 0);
+    WriteHotkeyCombo(L"OpenHotkeyModifiers", L"OpenHotkeyVk", g_openHotkey);
+    WriteHotkeyCombo(L"CloseHotkeyModifiers", L"CloseHotkeyVk", g_closeHotkey);
 }
 
 RECT VirtualScreenRect() {
@@ -679,8 +1139,14 @@ void DrawCrosshair(HDC hdc, const RECT& clientRect) {
 
 void DrawPreviewPanel(HDC hdc, const RECT& rect) {
     HBRUSH background = CreateSolidBrush(RGB(31, 34, 39));
-    FillRect(hdc, &rect, background);
+    HPEN border = CreatePen(PS_SOLID, 1, kSettingsBorder);
+    HGDIOBJ oldBrush = SelectObject(hdc, background);
+    HGDIOBJ oldPen = SelectObject(hdc, border);
+    RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, 18, 18);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
     DeleteObject(background);
+    DeleteObject(border);
 
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
@@ -709,23 +1175,54 @@ void DrawPreview(HWND hwnd, HDC hdc) {
     DrawPreviewPanel(hdc, rect);
 }
 
-RECT SettingsPanelRect(HWND hwnd) {
+RECT OverlayRect(HWND hwnd, int x, int y, int width, int height) {
     RECT client{};
     GetClientRect(hwnd, &client);
 
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
-    const int width = std::min(kSettingsClientWidth, std::max(320, clientWidth - (kSettingsOverlayMargin * 2)));
-    const int height = std::min(kSettingsClientHeight, std::max(360, clientHeight - (kSettingsOverlayMargin * 2)));
-    const int left = std::max(kSettingsOverlayMargin, (clientWidth - width) / 2);
-    const int top = std::max(kSettingsOverlayMargin, (clientHeight - height) / 2);
+    const int leftGroupX = std::max(44, clientWidth / 18);
+    const int rightGroupX = std::max(leftGroupX + 380, clientWidth - 540);
+    const int bottomX = std::max(kSettingsOverlayMargin, (clientWidth - 620) / 2);
 
+    int left = x;
+    int top = y;
+
+    POINT offset{0, 0};
+
+    if (y >= 780) {
+        left = bottomX + (x - 24);
+        top = std::max(kSettingsOverlayMargin, clientHeight - 72);
+        offset = g_actionOffset;
+    } else if (y >= 740) {
+        left = bottomX + (x - 24);
+        top = std::max(kSettingsOverlayMargin, clientHeight - 120);
+        offset = g_optionOffset;
+    } else if (y >= 498) {
+        left = rightGroupX + (x - 24);
+        top = 470 + (y - 520);
+        offset = g_colorOffset;
+    } else if (y >= 258) {
+        left = rightGroupX + (x - 24);
+        top = 170 + (y - 282);
+        offset = g_shapeOffset;
+    } else if (y >= 214) {
+        left = leftGroupX + (x - 24);
+        top = 178 + (y - 232);
+        offset = g_presetOffset;
+    } else {
+        left = leftGroupX + x;
+        top = kSettingsOverlayMargin + y;
+        offset = g_titleOffset;
+    }
+
+    left += offset.x;
+    top += offset.y;
     return {left, top, left + width, top + height};
 }
 
-void UpdateSettingsOrigin(HWND hwnd) {
-    const RECT panel = SettingsPanelRect(hwnd);
-    g_settingsOrigin = {panel.left, panel.top};
+void RegisterLayoutItem(HWND hwnd, int x, int y, int width, int height) {
+    g_layoutItems.push_back(LayoutItem{hwnd, x, y, width, height});
 }
 
 void MoveControl(HWND control, int x, int y, int width, int height) {
@@ -733,14 +1230,8 @@ void MoveControl(HWND control, int x, int y, int width, int height) {
         return;
     }
 
-    SetWindowPos(
-        control,
-        nullptr,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
-        width,
-        height,
-        SWP_NOZORDER | SWP_NOACTIVATE);
+    const RECT rect = OverlayRect(g_settingsWindow, x, y, width, height);
+    SetWindowPos(control, nullptr, rect.left, rect.top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void LayoutSettingsControls() {
@@ -748,28 +1239,9 @@ void LayoutSettingsControls() {
         return;
     }
 
-    UpdateSettingsOrigin(g_settingsWindow);
-
-    MoveControl(g_controls.presetCombo, 112, 232, 260, 220);
-    MoveControl(g_controls.lengthTrack, 122, 282, 316, 28);
-    MoveControl(g_controls.lengthEdit, 462, 283, 64, 24);
-    MoveControl(g_controls.gapTrack, 122, 320, 316, 28);
-    MoveControl(g_controls.gapEdit, 462, 321, 64, 24);
-    MoveControl(g_controls.thicknessTrack, 122, 358, 316, 28);
-    MoveControl(g_controls.thicknessEdit, 462, 359, 64, 24);
-    MoveControl(g_controls.opacityTrack, 122, 396, 316, 28);
-    MoveControl(g_controls.opacityEdit, 462, 397, 64, 24);
-    MoveControl(g_controls.offsetXTrack, 122, 434, 316, 28);
-    MoveControl(g_controls.offsetXEdit, 462, 435, 64, 24);
-    MoveControl(g_controls.offsetYTrack, 122, 472, 316, 28);
-    MoveControl(g_controls.offsetYEdit, 462, 473, 64, 24);
-    MoveControl(g_controls.redEdit, 142, 520, 52, 24);
-    MoveControl(g_controls.greenEdit, 228, 520, 52, 24);
-    MoveControl(g_controls.blueEdit, 314, 520, 52, 24);
-    MoveControl(g_controls.colorSwatch, 386, 520, 140, 24);
-    MoveControl(g_controls.dotCheck, 24, 572, 180, 24);
-    MoveControl(g_controls.outlineCheck, 160, 572, 180, 24);
-    MoveControl(g_controls.visibleCheck, 300, 572, 180, 24);
+    for (const LayoutItem& item : g_layoutItems) {
+        MoveControl(item.hwnd, item.x, item.y, item.width, item.height);
+    }
 }
 
 void RedrawOverlay(HWND hwnd) {
@@ -782,6 +1254,7 @@ void RedrawOverlay(HWND hwnd) {
 }
 
 void UpdateSettingsControls();
+void RebuildPresetCombo();
 
 void NotifySettingsChanged(bool persist) {
     ApplyLayeredAttributes(g_window);
@@ -845,38 +1318,83 @@ int MatchingPresetIndex() {
         }
     }
 
+    for (size_t index = 0; index < g_customPresets.size(); ++index) {
+        if (SettingsMatchPreset(g_settings, g_customPresets[index])) {
+            return static_cast<int>(kPresets.size() + index);
+        }
+    }
+
     return -1;
 }
 
 void ApplyPreset(size_t index) {
-    if (index >= kPresets.size()) {
-        return;
+    CrosshairSettings preset;
+    if (index < kPresets.size()) {
+        preset = kPresets[index].settings;
+    } else {
+        const size_t customIndex = index - kPresets.size();
+        if (customIndex >= g_customPresets.size()) {
+            return;
+        }
+        preset = g_customPresets[customIndex];
     }
 
     const bool wasVisible = g_settings.visible;
-    g_settings = kPresets[index].settings;
+    g_settings = preset;
     g_settings.visible = wasVisible;
     NotifySettingsChanged(true);
 }
 
+void SaveCurrentPreset() {
+    const std::wstring name = L"Custom " + std::to_wstring(g_customPresets.size() + 1);
+    g_customPresetNames.push_back(name);
+    g_customPresets.push_back(g_settings);
+    SaveCustomPresets();
+    RebuildPresetCombo();
+}
+
+void RemoveSelectedCustomPreset() {
+    if (!g_controls.presetCombo) {
+        return;
+    }
+
+    const int selection = static_cast<int>(SendMessageW(g_controls.presetCombo, CB_GETCURSEL, 0, 0));
+    const int customIndex = selection - static_cast<int>(kPresets.size());
+    if (customIndex < 0 || customIndex >= static_cast<int>(g_customPresets.size())) {
+        MessageBoxW(MessageOwner(), L"Only saved custom presets can be removed.", L"Crosshair Presets", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    g_customPresetNames.erase(g_customPresetNames.begin() + customIndex);
+    g_customPresets.erase(g_customPresets.begin() + customIndex);
+    SaveCustomPresets();
+    RebuildPresetCombo();
+}
+
 void CycleColor(HWND hwnd) {
+    const size_t presetCount = kPresets.size() + g_customPresets.size();
+    if (presetCount == 0) {
+        return;
+    }
+
     const int currentPreset = MatchingPresetIndex();
     const size_t nextPreset = currentPreset < 0
         ? 0
-        : (static_cast<size_t>(currentPreset) + 1) % kPresets.size();
+        : (static_cast<size_t>(currentPreset) + 1) % presetCount;
 
     ApplyPreset(nextPreset);
     RedrawOverlay(hwnd);
 }
 
 HWND CreateLabel(HWND parent, const wchar_t* text, int x, int y, int width, int height) {
+    const RECT rect = OverlayRect(parent, x, y, width, height);
     HWND control = CreateWindowExW(
-        0,
+        WS_EX_TRANSPARENT,
         L"STATIC",
         text,
         WS_CHILD | WS_VISIBLE,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
+        rect.left,
+        rect.top,
         width,
         height,
         parent,
@@ -884,17 +1402,19 @@ HWND CreateLabel(HWND parent, const wchar_t* text, int x, int y, int width, int 
         g_instance,
         nullptr);
     SetUiFont(control);
+    RegisterLayoutItem(control, x, y, width, height);
     return control;
 }
 
 HWND CreateEditBox(HWND parent, ControlId id, int x, int y, int width = 64) {
+    const RECT rect = OverlayRect(parent, x, y, width, 24);
     HWND control = CreateWindowExW(
         WS_EX_CLIENTEDGE,
         L"EDIT",
         L"",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_RIGHT,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
+        rect.left,
+        rect.top,
         width,
         24,
         parent,
@@ -902,18 +1422,21 @@ HWND CreateEditBox(HWND parent, ControlId id, int x, int y, int width = 64) {
         g_instance,
         nullptr);
     SetUiFont(control);
+    RegisterLayoutItem(control, x, y, width, 24);
     return control;
 }
 
 HWND CreateTrackbar(HWND parent, ControlId id, int x, int y, int minValue, int maxValue) {
+    constexpr int width = 316;
+    const RECT rect = OverlayRect(parent, x, y, width, 28);
     HWND control = CreateWindowExW(
         0,
         TRACKBAR_CLASSW,
         L"",
         WS_CHILD | WS_VISIBLE | TBS_NOTICKS,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
-        316,
+        rect.left,
+        rect.top,
+        width,
         28,
         parent,
         reinterpret_cast<HMENU>(static_cast<int>(id)),
@@ -921,35 +1444,66 @@ HWND CreateTrackbar(HWND parent, ControlId id, int x, int y, int minValue, int m
         nullptr);
     SendMessageW(control, TBM_SETRANGEMIN, FALSE, minValue);
     SendMessageW(control, TBM_SETRANGEMAX, TRUE, maxValue);
+    SendMessageW(control, TBM_SETBKCOLOR, 0, kSettingsPanel);
+    SendMessageW(control, TBM_SETCHANNELCOLOR, 0, RGB(210, 216, 224));
+    SendMessageW(control, TBM_SETTHUMBCOLOR, 0, RGB(238, 242, 247));
+    RegisterLayoutItem(control, x, y, width, 28);
     return control;
 }
 
-HWND CreateCheckbox(HWND parent, ControlId id, const wchar_t* text, int x, int y) {
+HWND CreateTrackbar(HWND parent, ControlId id, int x, int y, int width, int minValue, int maxValue) {
+    const RECT rect = OverlayRect(parent, x, y, width, 28);
+    HWND control = CreateWindowExW(
+        0,
+        TRACKBAR_CLASSW,
+        L"",
+        WS_CHILD | WS_VISIBLE | TBS_NOTICKS,
+        rect.left,
+        rect.top,
+        width,
+        28,
+        parent,
+        reinterpret_cast<HMENU>(static_cast<int>(id)),
+        g_instance,
+        nullptr);
+    SendMessageW(control, TBM_SETRANGEMIN, FALSE, minValue);
+    SendMessageW(control, TBM_SETRANGEMAX, TRUE, maxValue);
+    SendMessageW(control, TBM_SETBKCOLOR, 0, kSettingsPanel);
+    SendMessageW(control, TBM_SETCHANNELCOLOR, 0, RGB(210, 216, 224));
+    SendMessageW(control, TBM_SETTHUMBCOLOR, 0, RGB(238, 242, 247));
+    RegisterLayoutItem(control, x, y, width, 28);
+    return control;
+}
+
+HWND CreateCheckbox(HWND parent, ControlId id, const wchar_t* text, int x, int y, int width) {
+    const RECT rect = OverlayRect(parent, x, y, width, 24);
     HWND control = CreateWindowExW(
         0,
         L"BUTTON",
         text,
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
-        180,
+        rect.left,
+        rect.top,
+        width,
         24,
         parent,
         reinterpret_cast<HMENU>(static_cast<int>(id)),
         g_instance,
         nullptr);
     SetUiFont(control);
+    RegisterLayoutItem(control, x, y, width, 24);
     return control;
 }
 
 HWND CreateButton(HWND parent, ControlId id, const wchar_t* text, int x, int y, int width) {
+    const RECT rect = OverlayRect(parent, x, y, width, 30);
     HWND control = CreateWindowExW(
         0,
         L"BUTTON",
         text,
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        g_settingsOrigin.x + x,
-        g_settingsOrigin.y + y,
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        rect.left,
+        rect.top,
         width,
         30,
         parent,
@@ -957,6 +1511,7 @@ HWND CreateButton(HWND parent, ControlId id, const wchar_t* text, int x, int y, 
         g_instance,
         nullptr);
     SetUiFont(control);
+    RegisterLayoutItem(control, x, y, width, 30);
     return control;
 }
 
@@ -986,6 +1541,98 @@ bool TryReadEditInt(HWND edit, int& value) {
     return true;
 }
 
+std::wstring HotkeyName(UINT vk) {
+    if (vk >= 'A' && vk <= 'Z') {
+        return std::wstring(1, static_cast<wchar_t>(vk));
+    }
+
+    if (vk >= '0' && vk <= '9') {
+        return std::wstring(1, static_cast<wchar_t>(vk));
+    }
+
+    if (vk >= VK_F1 && vk <= VK_F12) {
+        return L"F" + std::to_wstring(vk - VK_F1 + 1);
+    }
+
+    switch (vk) {
+    case VK_BACK:
+        return L"Backspace";
+    case VK_TAB:
+        return L"Tab";
+    case VK_RETURN:
+        return L"Enter";
+    case VK_SPACE:
+        return L"Space";
+    case VK_PRIOR:
+        return L"PageUp";
+    case VK_NEXT:
+        return L"PageDown";
+    case VK_END:
+        return L"End";
+    case VK_HOME:
+        return L"Home";
+    case VK_LEFT:
+        return L"Left";
+    case VK_UP:
+        return L"Up";
+    case VK_RIGHT:
+        return L"Right";
+    case VK_DOWN:
+        return L"Down";
+    case VK_INSERT:
+        return L"Insert";
+    case VK_DELETE:
+        return L"Delete";
+    default:
+        break;
+    }
+
+    const UINT scanCode = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    wchar_t name[64]{};
+    if (scanCode != 0 && GetKeyNameTextW(static_cast<LONG>(scanCode << 16), name, ARRAYSIZE(name)) > 0) {
+        return name;
+    }
+
+    return L"VK " + std::to_wstring(vk);
+}
+
+std::wstring HotkeyComboName(const HotkeyCombo& combo) {
+    std::wstring text;
+    if (combo.modifiers & MOD_CONTROL) {
+        text += L"Ctrl+";
+    }
+    if (combo.modifiers & MOD_ALT) {
+        text += L"Alt+";
+    }
+    if (combo.modifiers & MOD_SHIFT) {
+        text += L"Shift+";
+    }
+    if (combo.modifiers & MOD_WIN) {
+        text += L"Win+";
+    }
+
+    text += HotkeyName(combo.vk);
+    return text;
+}
+
+HotkeyCombo CurrentPressedHotkeyCombo(UINT vk) {
+    HotkeyCombo combo{0, vk};
+    if (GetKeyState(VK_CONTROL) & 0x8000) {
+        combo.modifiers |= MOD_CONTROL;
+    }
+    if (GetKeyState(VK_MENU) & 0x8000) {
+        combo.modifiers |= MOD_ALT;
+    }
+    if (GetKeyState(VK_SHIFT) & 0x8000) {
+        combo.modifiers |= MOD_SHIFT;
+    }
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) {
+        combo.modifiers |= MOD_WIN;
+    }
+
+    return combo;
+}
+
 void UpdateSettingsControls() {
     if (!g_settingsWindow) {
         return;
@@ -999,6 +1646,9 @@ void UpdateSettingsControls() {
     SetTrackValue(g_controls.opacityTrack, g_settings.opacity);
     SetTrackValue(g_controls.offsetXTrack, g_settings.offsetX);
     SetTrackValue(g_controls.offsetYTrack, g_settings.offsetY);
+    SetTrackValue(g_controls.redTrack, g_settings.red);
+    SetTrackValue(g_controls.greenTrack, g_settings.green);
+    SetTrackValue(g_controls.blueTrack, g_settings.blue);
 
     SetEditInt(g_controls.lengthEdit, g_settings.length);
     SetEditInt(g_controls.gapEdit, g_settings.gap);
@@ -1009,6 +1659,13 @@ void UpdateSettingsControls() {
     SetEditInt(g_controls.redEdit, g_settings.red);
     SetEditInt(g_controls.greenEdit, g_settings.green);
     SetEditInt(g_controls.blueEdit, g_settings.blue);
+    if (g_hotkeyCaptureEdit != g_controls.openHotkeyEdit) {
+        SetWindowTextW(g_controls.openHotkeyEdit, HotkeyComboName(g_openHotkey).c_str());
+    }
+    if (g_hotkeyCaptureEdit != g_controls.closeHotkeyEdit) {
+        SetWindowTextW(g_controls.closeHotkeyEdit, HotkeyComboName(g_closeHotkey).c_str());
+    }
+    SetWindowTextW(g_controls.backupHotkeyEdit, L"Ctrl+Alt+Shift+F12");
 
     const int matchingPreset = MatchingPresetIndex();
     SendMessageW(g_controls.presetCombo, CB_SETCURSEL, matchingPreset >= 0 ? static_cast<WPARAM>(matchingPreset) : static_cast<WPARAM>(-1), 0);
@@ -1027,17 +1684,41 @@ void UpdateSettingsControls() {
     }
 }
 
+void RebuildPresetCombo() {
+    if (!g_controls.presetCombo) {
+        return;
+    }
+
+    SendMessageW(g_controls.presetCombo, CB_RESETCONTENT, 0, 0);
+    for (const CrosshairPreset& preset : kPresets) {
+        SendMessageW(g_controls.presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset.name));
+    }
+
+    for (const std::wstring& name : g_customPresetNames) {
+        SendMessageW(g_controls.presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name.c_str()));
+    }
+
+    const int matchingPreset = MatchingPresetIndex();
+    SendMessageW(
+        g_controls.presetCombo,
+        CB_SETCURSEL,
+        matchingPreset >= 0 ? static_cast<WPARAM>(matchingPreset) : static_cast<WPARAM>(-1),
+        0);
+}
+
 void CreateSettingsControls(HWND hwnd) {
     g_controls = {};
+    g_layoutItems.clear();
 
     CreateLabel(hwnd, L"Preset", 24, 236, 84, 22);
+    const RECT presetRect = OverlayRect(hwnd, 112, 232, 260, 220);
     g_controls.presetCombo = CreateWindowExW(
         0,
         L"COMBOBOX",
         L"",
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
-        g_settingsOrigin.x + 112,
-        g_settingsOrigin.y + 232,
+        presetRect.left,
+        presetRect.top,
         260,
         220,
         hwnd,
@@ -1045,12 +1726,10 @@ void CreateSettingsControls(HWND hwnd) {
         g_instance,
         nullptr);
     SetUiFont(g_controls.presetCombo);
+    RegisterLayoutItem(g_controls.presetCombo, 112, 232, 260, 220);
     SendMessageW(g_controls.presetCombo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), 26);
     SendMessageW(g_controls.presetCombo, CB_SETITEMHEIGHT, 0, 26);
-
-    for (const CrosshairPreset& preset : kPresets) {
-        SendMessageW(g_controls.presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset.name));
-    }
+    RebuildPresetCombo();
 
     constexpr int labelX = 24;
     constexpr int trackX = 122;
@@ -1087,35 +1766,54 @@ void CreateSettingsControls(HWND hwnd) {
     g_controls.offsetYTrack = CreateTrackbar(hwnd, ControlId::OffsetYTrack, trackX, y, kMinOffset, kMaxOffset);
     g_controls.offsetYEdit = CreateEditBox(hwnd, ControlId::OffsetYEdit, editX, y + 1);
 
-    CreateLabel(hwnd, L"RGB", labelX, 524, 90, 22);
-    CreateLabel(hwnd, L"R", 122, 524, 16, 22);
-    g_controls.redEdit = CreateEditBox(hwnd, ControlId::RedEdit, 142, 520, 52);
-    CreateLabel(hwnd, L"G", 208, 524, 16, 22);
-    g_controls.greenEdit = CreateEditBox(hwnd, ControlId::GreenEdit, 228, 520, 52);
-    CreateLabel(hwnd, L"B", 294, 524, 16, 22);
-    g_controls.blueEdit = CreateEditBox(hwnd, ControlId::BlueEdit, 314, 520, 52);
+    CreateLabel(hwnd, L"Red", labelX, 524, 90, 22);
+    g_controls.redTrack = CreateTrackbar(hwnd, ControlId::RedTrack, trackX, 520, 244, 0, 255);
+    g_controls.redEdit = CreateEditBox(hwnd, ControlId::RedEdit, editX, 521);
+
+    CreateLabel(hwnd, L"Green", labelX, 562, 90, 22);
+    g_controls.greenTrack = CreateTrackbar(hwnd, ControlId::GreenTrack, trackX, 558, 244, 0, 255);
+    g_controls.greenEdit = CreateEditBox(hwnd, ControlId::GreenEdit, editX, 559);
+
+    CreateLabel(hwnd, L"Blue", labelX, 600, 90, 22);
+    g_controls.blueTrack = CreateTrackbar(hwnd, ControlId::BlueTrack, trackX, 596, 244, 0, 255);
+    g_controls.blueEdit = CreateEditBox(hwnd, ControlId::BlueEdit, editX, 597);
+
+    CreateLabel(hwnd, L"Color", labelX, 636, 90, 22);
+    const RECT swatchRect = OverlayRect(hwnd, 122, 632, 244, 24);
     g_controls.colorSwatch = CreateWindowExW(
         0,
         L"STATIC",
         L"",
         WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
-        g_settingsOrigin.x + 386,
-        g_settingsOrigin.y + 520,
-        140,
+        swatchRect.left,
+        swatchRect.top,
+        244,
         24,
         hwnd,
         reinterpret_cast<HMENU>(static_cast<int>(ControlId::ColorSwatch)),
         g_instance,
         nullptr);
+    RegisterLayoutItem(g_controls.colorSwatch, 122, 632, 244, 24);
+    CreateLabel(hwnd, L"Open", 386, 633, 52, 22);
+    g_controls.openHotkeyEdit = CreateEditBox(hwnd, ControlId::OpenHotkeyEdit, 442, 632, 124);
+    SendMessageW(g_controls.openHotkeyEdit, EM_SETREADONLY, TRUE, 0);
+    CreateLabel(hwnd, L"Hide", 386, 670, 52, 22);
+    g_controls.closeHotkeyEdit = CreateEditBox(hwnd, ControlId::CloseHotkeyEdit, 442, 669, 124);
+    SendMessageW(g_controls.closeHotkeyEdit, EM_SETREADONLY, TRUE, 0);
+    CreateLabel(hwnd, L"Backup", 386, 707, 52, 22);
+    g_controls.backupHotkeyEdit = CreateEditBox(hwnd, ControlId::BackupHotkeyEdit, 442, 706, 124);
+    SendMessageW(g_controls.backupHotkeyEdit, EM_SETREADONLY, TRUE, 0);
 
-    g_controls.dotCheck = CreateCheckbox(hwnd, ControlId::DotCheck, L"Center dot", 24, 572);
-    g_controls.outlineCheck = CreateCheckbox(hwnd, ControlId::OutlineCheck, L"Dark outline", 160, 572);
-    g_controls.visibleCheck = CreateCheckbox(hwnd, ControlId::VisibleCheck, L"Show crosshair", 300, 572);
+    g_controls.dotCheck = CreateCheckbox(hwnd, ControlId::DotCheck, L"Center dot", 24, 740, 120);
+    g_controls.outlineCheck = CreateCheckbox(hwnd, ControlId::OutlineCheck, L"Dark outline", 182, 740, 130);
+    g_controls.visibleCheck = CreateCheckbox(hwnd, ControlId::VisibleCheck, L"Show crosshair", 350, 740, 150);
 
-    CreateLabel(hwnd, L"Typed values save live. Use Ctrl+Alt+S to reopen this editor.", 24, 620, 260, 22);
-    CreateButton(hwnd, ControlId::CheckUpdateButton, L"Updates", 296, 612, 96);
-    CreateButton(hwnd, ControlId::ResetButton, L"Reset", 408, 612, 80);
-    CreateButton(hwnd, ControlId::CloseButton, L"Close", 516, 612, 80);
+    CreateButton(hwnd, ControlId::SavePresetButton, L"Save preset", 24, 780, 96);
+    CreateButton(hwnd, ControlId::RemovePresetButton, L"Remove", 130, 780, 74);
+    CreateButton(hwnd, ControlId::CheckUpdateButton, L"Updates", 290, 780, 82);
+    CreateButton(hwnd, ControlId::ResetButton, L"Reset", 380, 780, 64);
+    CreateButton(hwnd, ControlId::CloseButton, L"Hide", 452, 780, 64);
+    CreateButton(hwnd, ControlId::ExitButton, L"Exit", 524, 780, 64);
 
     UpdateSettingsControls();
 }
@@ -1133,6 +1831,12 @@ void ApplyTrackbarValue(HWND track) {
         g_settings.offsetX = GetTrackValue(track);
     } else if (track == g_controls.offsetYTrack) {
         g_settings.offsetY = GetTrackValue(track);
+    } else if (track == g_controls.redTrack) {
+        g_settings.red = GetTrackValue(track);
+    } else if (track == g_controls.greenTrack) {
+        g_settings.green = GetTrackValue(track);
+    } else if (track == g_controls.blueTrack) {
+        g_settings.blue = GetTrackValue(track);
     } else {
         return;
     }
@@ -1182,6 +1886,60 @@ void ResetSettings() {
     NotifySettingsChanged(true);
 }
 
+void BeginHotkeyCapture(HWND hwnd, HWND edit) {
+    if (g_hotkeyCaptureEdit && g_hotkeyCaptureEdit != edit) {
+        UpdateSettingsControls();
+    }
+
+    g_hotkeyCaptureEdit = edit;
+    SetWindowTextW(edit, L"Press key...");
+    SetFocus(hwnd);
+}
+
+void ApplyCapturedHotkey(HWND hwnd, HWND edit, const HotkeyCombo& newHotkey) {
+    constexpr UINT backupModifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
+    const HotkeyCombo backupHotkey{backupModifiers, VK_F12};
+
+    if (!IsAllowedHotkeyVk(newHotkey.vk)) {
+        MessageBoxW(hwnd, L"That key cannot be used for this shortcut.", L"Crosshair Shortcuts", MB_OK | MB_ICONINFORMATION);
+        g_hotkeyCaptureEdit = nullptr;
+        UpdateSettingsControls();
+        return;
+    }
+
+    const bool editingOpen = edit == g_controls.openHotkeyEdit;
+    if (HotkeyCombosEqual(newHotkey, backupHotkey)) {
+        MessageBoxW(hwnd, L"That combo is reserved for emergency open.", L"Crosshair Shortcuts", MB_OK | MB_ICONINFORMATION);
+        g_hotkeyCaptureEdit = nullptr;
+        UpdateSettingsControls();
+        return;
+    }
+
+    const HotkeyCombo oldOpen = g_openHotkey;
+    const HotkeyCombo oldClose = g_closeHotkey;
+    if (editingOpen) {
+        g_openHotkey = newHotkey;
+    } else {
+        g_closeHotkey = newHotkey;
+    }
+
+    UnregisterHotkeys(g_window);
+    if (!RegisterHotkeys(g_window)) {
+        UnregisterHotkeys(g_window);
+        g_openHotkey = oldOpen;
+        g_closeHotkey = oldClose;
+        RegisterHotkeys(g_window);
+        MessageBoxW(hwnd, L"Windows would not register that shortcut. Try another key.", L"Crosshair Shortcuts", MB_OK | MB_ICONWARNING);
+        g_hotkeyCaptureEdit = nullptr;
+        UpdateSettingsControls();
+        return;
+    }
+
+    g_hotkeyCaptureEdit = nullptr;
+    SaveSettings();
+    UpdateSettingsControls();
+}
+
 void HandleSettingsCommand(HWND hwnd, WPARAM wParam, LPARAM lParam) {
     const int id = LOWORD(wParam);
     const int notification = HIWORD(wParam);
@@ -1190,7 +1948,8 @@ void HandleSettingsCommand(HWND hwnd, WPARAM wParam, LPARAM lParam) {
     case ControlId::PresetCombo:
         if (notification == CBN_SELCHANGE) {
             const int selection = static_cast<int>(SendMessageW(g_controls.presetCombo, CB_GETCURSEL, 0, 0));
-            if (selection >= 0 && selection < static_cast<int>(kPresets.size())) {
+            if (selection >= 0 &&
+                selection < static_cast<int>(kPresets.size() + g_customPresets.size())) {
                 ApplyPreset(static_cast<size_t>(selection));
             }
         }
@@ -1209,6 +1968,13 @@ void HandleSettingsCommand(HWND hwnd, WPARAM wParam, LPARAM lParam) {
             ApplyEditValue(reinterpret_cast<HWND>(lParam));
         } else if (notification == EN_KILLFOCUS) {
             UpdateSettingsControls();
+        }
+        break;
+
+    case ControlId::OpenHotkeyEdit:
+    case ControlId::CloseHotkeyEdit:
+        if (notification == EN_SETFOCUS) {
+            BeginHotkeyCapture(hwnd, reinterpret_cast<HWND>(lParam));
         }
         break;
 
@@ -1244,9 +2010,27 @@ void HandleSettingsCommand(HWND hwnd, WPARAM wParam, LPARAM lParam) {
         }
         break;
 
+    case ControlId::SavePresetButton:
+        if (notification == BN_CLICKED) {
+            SaveCurrentPreset();
+        }
+        break;
+
+    case ControlId::RemovePresetButton:
+        if (notification == BN_CLICKED) {
+            RemoveSelectedCustomPreset();
+        }
+        break;
+
     case ControlId::CloseButton:
         if (notification == BN_CLICKED) {
             DestroyWindow(hwnd);
+        }
+        break;
+
+    case ControlId::ExitButton:
+        if (notification == BN_CLICKED) {
+            DestroyWindow(g_window);
         }
         break;
 
@@ -1256,13 +2040,18 @@ void HandleSettingsCommand(HWND hwnd, WPARAM wParam, LPARAM lParam) {
 }
 
 void DrawPresetComboItem(const DRAWITEMSTRUCT& item) {
-    if (item.itemID == static_cast<UINT>(-1) || item.itemID >= kPresets.size()) {
+    if (item.itemID == static_cast<UINT>(-1) ||
+        item.itemID >= kPresets.size() + g_customPresets.size()) {
         return;
     }
 
     const bool selected = (item.itemState & ODS_SELECTED) != 0;
     const COLORREF backgroundColor = selected ? RGB(0, 118, 90) : kSettingsPanelLight;
     const COLORREF textColor = kSettingsText;
+    const bool custom = item.itemID >= kPresets.size();
+    const size_t customIndex = custom ? item.itemID - kPresets.size() : 0;
+    const CrosshairSettings& preset = custom ? g_customPresets[customIndex] : kPresets[item.itemID].settings;
+    const wchar_t* name = custom ? g_customPresetNames[customIndex].c_str() : kPresets[item.itemID].name;
 
     HBRUSH background = CreateSolidBrush(backgroundColor);
     FillRect(item.hDC, &item.rcItem, background);
@@ -1274,7 +2063,6 @@ void DrawPresetComboItem(const DRAWITEMSTRUCT& item) {
         item.rcItem.left + 28,
         item.rcItem.bottom - 5,
     };
-    const CrosshairSettings& preset = kPresets[item.itemID].settings;
     HBRUSH swatchBrush = CreateSolidBrush(RGB(preset.red, preset.green, preset.blue));
     FillRect(item.hDC, &swatch, swatchBrush);
     DeleteObject(swatchBrush);
@@ -1285,7 +2073,7 @@ void DrawPresetComboItem(const DRAWITEMSTRUCT& item) {
     SetBkMode(item.hDC, TRANSPARENT);
     SetTextColor(item.hDC, textColor);
     SelectObject(item.hDC, UiFont());
-    DrawTextW(item.hDC, kPresets[item.itemID].name, -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+    DrawTextW(item.hDC, name, -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
     if (item.itemState & ODS_FOCUS) {
         DrawFocusRect(item.hDC, &item.rcItem);
@@ -1294,72 +2082,211 @@ void DrawPresetComboItem(const DRAWITEMSTRUCT& item) {
 
 void DrawColorSwatch(const DRAWITEMSTRUCT& item) {
     RECT rect = item.rcItem;
-    HBRUSH frame = CreateSolidBrush(kSettingsPanelLight);
-    FillRect(item.hDC, &rect, frame);
+    HBRUSH frame = CreateSolidBrush(kSettingsBorder);
+    HPEN pen = CreatePen(PS_SOLID, 1, kSettingsBorder);
+    HGDIOBJ oldBrush = SelectObject(item.hDC, frame);
+    HGDIOBJ oldPen = SelectObject(item.hDC, pen);
+    RoundRect(item.hDC, rect.left, rect.top, rect.right, rect.bottom, 12, 12);
+    SelectObject(item.hDC, oldBrush);
+    SelectObject(item.hDC, oldPen);
     DeleteObject(frame);
+    DeleteObject(pen);
 
     InflateRect(&rect, -3, -3);
     HBRUSH color = CreateSolidBrush(CurrentColor());
-    FillRect(item.hDC, &rect, color);
+    oldBrush = SelectObject(item.hDC, color);
+    oldPen = SelectObject(item.hDC, reinterpret_cast<HPEN>(GetStockObject(NULL_PEN)));
+    RoundRect(item.hDC, rect.left, rect.top, rect.right, rect.bottom, 9, 9);
+    SelectObject(item.hDC, oldBrush);
+    SelectObject(item.hDC, oldPen);
     DeleteObject(color);
+}
 
-    FrameRect(item.hDC, &rect, reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+void FillRoundedRect(HDC hdc, const RECT& rect, COLORREF fillColor, COLORREF borderColor, int radius) {
+    HBRUSH brush = CreateSolidBrush(fillColor);
+    HPEN pen = CreatePen(PS_SOLID, 1, borderColor);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+}
+
+void DrawOverlayButton(const DRAWITEMSTRUCT& item) {
+    RECT rect = item.rcItem;
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const bool focused = (item.itemState & ODS_FOCUS) != 0;
+    const COLORREF fill = pressed ? RGB(210, 216, 224) : kSettingsPanelLight;
+    const COLORREF text = pressed ? RGB(20, 24, 30) : kSettingsText;
+
+    FillRoundedRect(item.hDC, rect, fill, focused ? RGB(148, 170, 205) : kSettingsBorder, 12);
+
+    wchar_t label[64]{};
+    GetWindowTextW(item.hwndItem, label, ARRAYSIZE(label));
+
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, text);
+    SelectObject(item.hDC, UiFont());
+    DrawTextW(item.hDC, label, -1, &rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+}
+
+bool PointInRect(const RECT& rect, POINT point) {
+    return point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom;
+}
+
+RECT InflatedRect(RECT rect, int dx, int dy) {
+    InflateRect(&rect, dx, dy);
+    return rect;
+}
+
+RECT TitlePanelRect() {
+    return {
+        kSettingsOverlayMargin + g_titleOffset.x,
+        kSettingsOverlayMargin + g_titleOffset.y,
+        340 + g_titleOffset.x,
+        86 + g_titleOffset.y,
+    };
+}
+
+OverlayPanel HitTestOverlayPanel(HWND hwnd, POINT point) {
+    if (PointInRect(TitlePanelRect(), point)) {
+        return OverlayPanel::Title;
+    }
+
+    if (PointInRect(InflatedRect(OverlayRect(hwnd, 12, 214, 350, 248), 12, 12), point)) {
+        return OverlayPanel::Presets;
+    }
+
+    if (PointInRect(InflatedRect(OverlayRect(hwnd, 12, 264, 530, 232), 12, 12), point)) {
+        return OverlayPanel::Shape;
+    }
+
+    if (PointInRect(InflatedRect(OverlayRect(hwnd, 12, 506, 566, 234), 12, 12), point)) {
+        return OverlayPanel::Color;
+    }
+
+    if (PointInRect(InflatedRect(OverlayRect(hwnd, 12, 740, 530, 34), 12, 10), point)) {
+        return OverlayPanel::Options;
+    }
+
+    if (PointInRect(InflatedRect(OverlayRect(hwnd, 12, 780, 588, 46), 12, 10), point)) {
+        return OverlayPanel::Actions;
+    }
+
+    return OverlayPanel::None;
+}
+
+POINT* OffsetForPanel(OverlayPanel panel) {
+    switch (panel) {
+    case OverlayPanel::Title:
+        return &g_titleOffset;
+    case OverlayPanel::Presets:
+        return &g_presetOffset;
+    case OverlayPanel::Shape:
+        return &g_shapeOffset;
+    case OverlayPanel::Color:
+        return &g_colorOffset;
+    case OverlayPanel::Options:
+        return &g_optionOffset;
+    case OverlayPanel::Actions:
+        return &g_actionOffset;
+    default:
+        return nullptr;
+    }
 }
 
 void DrawSettingsChrome(HWND hwnd, HDC hdc) {
     RECT client{};
     GetClientRect(hwnd, &client);
-    HBRUSH transparentBrush = CreateSolidBrush(kTransparentColor);
-    FillRect(hdc, &client, transparentBrush);
-    DeleteObject(transparentBrush);
-
-    const RECT panel = SettingsPanelRect(hwnd);
-    FillRect(hdc, &panel, g_settingsBackgroundBrush);
-
-    RECT header{panel.left, panel.top, panel.right, panel.top + 58};
-    FillRect(hdc, &header, g_settingsPanelBrush);
-
-    RECT accent{panel.left, panel.top, panel.left + 6, panel.top + 58};
-    HBRUSH accentBrush = CreateSolidBrush(CurrentColor());
-    FillRect(hdc, &accent, accentBrush);
-    DeleteObject(accentBrush);
+    HBRUSH backdrop = CreateSolidBrush(kSettingsBackground);
+    FillRect(hdc, &client, backdrop);
+    DeleteObject(backdrop);
 
     SetBkMode(hdc, TRANSPARENT);
     SelectObject(hdc, UiFont());
 
+    RECT titlePanel = TitlePanelRect();
+    FillRoundedRect(hdc, titlePanel, kSettingsPanel, kSettingsBorder, 18);
+    RECT accent{titlePanel.left, titlePanel.top, titlePanel.left + 6, titlePanel.bottom};
+    HBRUSH accentBrush = CreateSolidBrush(CurrentColor());
+    FillRect(hdc, &accent, accentBrush);
+    DeleteObject(accentBrush);
+
     const std::wstring titleText = std::wstring(L"Crosshair Studio ") + kAppVersion;
-    RECT title{panel.left + 24, panel.top + 12, panel.right - 24, panel.top + 34};
+    RECT title{titlePanel.left + 20, titlePanel.top + 10, titlePanel.right - 14, titlePanel.top + 34};
     SetTextColor(hdc, kSettingsText);
     DrawTextW(hdc, titleText.c_str(), -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT subtitle{panel.left + 24, panel.top + 34, panel.right - 24, panel.top + 54};
+    RECT subtitle{titlePanel.left + 20, titlePanel.top + 34, titlePanel.right - 14, titlePanel.bottom - 8};
     SetTextColor(hdc, kSettingsMutedText);
-    DrawTextW(hdc, L"Overlay editor - Esc to close", -1, &subtitle, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    DrawTextW(hdc, L"Transparent HUD editor - Esc hides", -1, &subtitle, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT preview{panel.left + 24, panel.top + 72, panel.right - 24, panel.top + 214};
-    DrawPreviewPanel(hdc, preview);
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    RECT preview{
+        std::max(380, (clientWidth - 440) / 2),
+        std::max(110, (clientHeight - 220) / 2),
+        std::max(380, (clientWidth - 440) / 2) + 440,
+        std::max(110, (clientHeight - 220) / 2) + 220,
+    };
+    FillRoundedRect(hdc, preview, RGB(24, 28, 34), kSettingsBorder, 22);
+    RECT previewInner = preview;
+    InflateRect(&previewInner, -10, -10);
+    DrawPreviewPanel(hdc, previewInner);
 
-    RECT shapePanel{panel.left + 16, panel.top + 224, panel.right - 16, panel.top + 558};
-    FillRect(hdc, &shapePanel, g_settingsPanelBrush);
+    RECT presetPanel = OverlayRect(hwnd, 12, 214, 350, 248);
+    InflateRect(&presetPanel, 12, 12);
+    FillRoundedRect(hdc, presetPanel, kSettingsPanel, kSettingsBorder, 18);
 
-    RECT optionsPanel{panel.left + 16, panel.top + 562, panel.right - 16, panel.top + 648};
-    FillRect(hdc, &optionsPanel, g_settingsPanelBrush);
+    RECT shapePanel = OverlayRect(hwnd, 12, 264, 530, 232);
+    InflateRect(&shapePanel, 12, 12);
+    FillRoundedRect(hdc, shapePanel, kSettingsPanel, kSettingsBorder, 18);
 
-    RECT shapeLabel{panel.left + 24, panel.top + 258, panel.left + 220, panel.top + 278};
+    RECT colorPanel = OverlayRect(hwnd, 12, 506, 566, 234);
+    InflateRect(&colorPanel, 12, 12);
+    FillRoundedRect(hdc, colorPanel, kSettingsPanel, kSettingsBorder, 18);
+
+    RECT optionPanel = OverlayRect(hwnd, 12, 740, 530, 34);
+    InflateRect(&optionPanel, 12, 10);
+    FillRoundedRect(hdc, optionPanel, kSettingsPanel, kSettingsBorder, 18);
+
+    RECT actionPanel = OverlayRect(hwnd, 12, 780, 588, 46);
+    InflateRect(&actionPanel, 12, 10);
+    FillRoundedRect(hdc, actionPanel, kSettingsPanel, kSettingsBorder, 18);
+
+    RECT shapeLabel = OverlayRect(hwnd, 24, 258, 220, 20);
     SetTextColor(hdc, kSettingsMutedText);
     DrawTextW(hdc, L"Shape", -1, &shapeLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT colorLabel{panel.left + 24, panel.top + 498, panel.left + 220, panel.top + 518};
+    RECT colorLabel = OverlayRect(hwnd, 24, 498, 220, 20);
     DrawTextW(hdc, L"Color", -1, &colorLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 }
 
 bool RegisterHotkeys(HWND hwnd) {
-    const UINT modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-    return RegisterHotKey(hwnd, static_cast<int>(HotkeyId::Settings), modifiers, 'S') != 0;
+    const UINT backupModifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT;
+    const bool openOk = RegisterHotKey(
+        hwnd,
+        static_cast<int>(HotkeyId::OpenSettings),
+        g_openHotkey.modifiers | MOD_NOREPEAT,
+        g_openHotkey.vk) != 0;
+    const bool sameToggle = HotkeyCombosEqual(g_openHotkey, g_closeHotkey);
+    const bool closeOk = sameToggle
+        ? true
+        : RegisterHotKey(
+            hwnd,
+            static_cast<int>(HotkeyId::CloseSettings),
+            g_closeHotkey.modifiers | MOD_NOREPEAT,
+            g_closeHotkey.vk) != 0;
+    RegisterHotKey(hwnd, static_cast<int>(HotkeyId::BackupOpenSettings), backupModifiers, VK_F12);
+    return openOk && closeOk;
 }
 
 void UnregisterHotkeys(HWND hwnd) {
-    UnregisterHotKey(hwnd, static_cast<int>(HotkeyId::Settings));
+    UnregisterHotKey(hwnd, static_cast<int>(HotkeyId::OpenSettings));
+    UnregisterHotKey(hwnd, static_cast<int>(HotkeyId::CloseSettings));
+    UnregisterHotKey(hwnd, static_cast<int>(HotkeyId::BackupOpenSettings));
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -1386,14 +2313,30 @@ void RemoveTrayIcon(HWND hwnd) {
 }
 
 void ShowHelp(HWND hwnd) {
+    const std::wstring openShortcut = HotkeyComboName(g_openHotkey);
+    const std::wstring closeShortcut = HotkeyComboName(g_closeHotkey);
     const std::wstring text =
         L"Version: " + std::wstring(kAppVersion) + L"\n\n"
         L"Hotkeys:\n"
-        L"Ctrl+Alt+S: Open settings\n\n"
-        L"Use the settings window or tray menu for everything else.\n"
+        + openShortcut + L": Open settings\n"
+        + closeShortcut + L": Hide settings\n\n"
+        L"Ctrl+Alt+Shift+F12: Emergency open settings\n\n"
+        L"Double-click or right-click the tray icon if you forget the custom shortcut.\n"
         L"The update checker looks at VKnubis/crossair on GitHub.";
 
     MessageBoxW(hwnd, text.c_str(), L"C++ Crosshair", MB_OK | MB_ICONINFORMATION);
+}
+
+bool IsTrackbarControl(HWND hwnd) {
+    return hwnd == g_controls.lengthTrack ||
+        hwnd == g_controls.gapTrack ||
+        hwnd == g_controls.thicknessTrack ||
+        hwnd == g_controls.opacityTrack ||
+        hwnd == g_controls.offsetXTrack ||
+        hwnd == g_controls.offsetYTrack ||
+        hwnd == g_controls.redTrack ||
+        hwnd == g_controls.greenTrack ||
+        hwnd == g_controls.blueTrack;
 }
 
 bool RegisterWindowClasses() {
@@ -1477,7 +2420,7 @@ void ShowSettingsWindow() {
         return;
     }
 
-    SetLayeredWindowAttributes(g_settingsWindow, kTransparentColor, 255, LWA_COLORKEY);
+    SetLayeredWindowAttributes(g_settingsWindow, 0, 224, LWA_ALPHA);
     UpdateSettingsControls();
     ShowWindow(g_settingsWindow, SW_SHOW);
     SetWindowPos(
@@ -1560,8 +2503,17 @@ void HandleCommand(HWND hwnd, WPARAM wParam) {
 }
 
 void HandleHotkey(HWND, WPARAM wParam) {
-    if (static_cast<HotkeyId>(wParam) == HotkeyId::Settings) {
-        ShowSettingsWindow();
+    if (static_cast<HotkeyId>(wParam) == HotkeyId::OpenSettings ||
+        static_cast<HotkeyId>(wParam) == HotkeyId::BackupOpenSettings) {
+        if (static_cast<HotkeyId>(wParam) == HotkeyId::OpenSettings &&
+            HotkeyCombosEqual(g_openHotkey, g_closeHotkey) &&
+            g_settingsWindow) {
+            DestroyWindow(g_settingsWindow);
+        } else {
+            ShowSettingsWindow();
+        }
+    } else if (static_cast<HotkeyId>(wParam) == HotkeyId::CloseSettings && g_settingsWindow) {
+        DestroyWindow(g_settingsWindow);
     }
 }
 
@@ -1585,7 +2537,6 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT message, WPARAM, LPARAM) {
 LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
-        UpdateSettingsOrigin(hwnd);
         CreateSettingsControls(hwnd);
         return 0;
 
@@ -1600,9 +2551,21 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN: {
         HDC hdc = reinterpret_cast<HDC>(wParam);
-        SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, kSettingsText);
-        return reinterpret_cast<LRESULT>(g_settingsPanelBrush);
+        if (message == WM_CTLCOLORSTATIC && IsTrackbarControl(reinterpret_cast<HWND>(lParam))) {
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, kSettingsPanel);
+            return reinterpret_cast<LRESULT>(g_settingsPanelBrush);
+        }
+
+        if (message == WM_CTLCOLORBTN) {
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, kSettingsPanel);
+            return reinterpret_cast<LRESULT>(g_settingsPanelBrush);
+        }
+
+        SetBkMode(hdc, TRANSPARENT);
+        return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
     }
 
     case WM_CTLCOLOREDIT: {
@@ -1627,7 +2590,65 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
         InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
 
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT point{};
+            GetCursorPos(&point);
+            ScreenToClient(hwnd, &point);
+            if (HitTestOverlayPanel(hwnd, point) != OverlayPanel::None) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                return TRUE;
+            }
+        }
+        break;
+
+    case WM_LBUTTONDOWN: {
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        g_dragPanel = HitTestOverlayPanel(hwnd, point);
+        POINT* offset = OffsetForPanel(g_dragPanel);
+        if (offset) {
+            g_dragStart = point;
+            g_dragStartOffset = *offset;
+            SetCapture(hwnd);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_MOUSEMOVE:
+        if (g_dragPanel != OverlayPanel::None && (wParam & MK_LBUTTON)) {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            POINT* offset = OffsetForPanel(g_dragPanel);
+            if (offset) {
+                offset->x = g_dragStartOffset.x + (point.x - g_dragStart.x);
+                offset->y = g_dragStartOffset.y + (point.y - g_dragStart.y);
+                LayoutSettingsControls();
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
+        }
+        break;
+
+    case WM_LBUTTONUP:
+        if (g_dragPanel != OverlayPanel::None) {
+            g_dragPanel = OverlayPanel::None;
+            ReleaseCapture();
+            return 0;
+        }
+        break;
+
     case WM_KEYDOWN:
+        if (g_hotkeyCaptureEdit) {
+            if (wParam == VK_ESCAPE) {
+                g_hotkeyCaptureEdit = nullptr;
+                DestroyWindow(hwnd);
+                return 0;
+            }
+
+            ApplyCapturedHotkey(hwnd, g_hotkeyCaptureEdit, CurrentPressedHotkeyCombo(static_cast<UINT>(wParam)));
+            return 0;
+        }
+
         if (wParam == VK_ESCAPE) {
             DestroyWindow(hwnd);
             return 0;
@@ -1649,6 +2670,15 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
         }
         if (wParam == static_cast<WPARAM>(ControlId::ColorSwatch)) {
             DrawColorSwatch(*reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
+            return TRUE;
+        }
+        if (wParam == static_cast<WPARAM>(ControlId::CheckUpdateButton) ||
+            wParam == static_cast<WPARAM>(ControlId::ResetButton) ||
+            wParam == static_cast<WPARAM>(ControlId::CloseButton) ||
+            wParam == static_cast<WPARAM>(ControlId::ExitButton) ||
+            wParam == static_cast<WPARAM>(ControlId::SavePresetButton) ||
+            wParam == static_cast<WPARAM>(ControlId::RemovePresetButton)) {
+            DrawOverlayButton(*reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
             return TRUE;
         }
         break;
@@ -1753,6 +2783,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     g_instance = instance;
     LoadSettings();
+    LoadCustomPresets();
 
     INITCOMMONCONTROLSEX commonControls{};
     commonControls.dwSize = sizeof(commonControls);
