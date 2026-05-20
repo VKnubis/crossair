@@ -2,7 +2,7 @@
 
 A small Windows crosshair overlay written in C++ with the Win32 API.
 
-Current app version: `v1.0.0`.
+Current app version: `v1.0.1`.
 
 ## Build
 
@@ -55,9 +55,11 @@ Use `crosshair.exe` for normal 64-bit Windows. If `crosshair-x86.exe` exists, ke
 
 ## Controls
 
-- `Ctrl+Alt+S` opens the settings window.
+- `Ctrl+Alt+S` opens the fullscreen overlay editor.
 
-The settings window customizes length, gap, thickness, opacity, position offset, full RGB color, center dot, outline, and visibility. Sliders and typed number boxes stay synced, so you can drag quickly or enter exact values.
+The overlay editor appears as a borderless topmost layer over the screen with a transparent background, so it feels closer to Steam/Xbox-style overlays than a normal app window. Press `Esc` to close it.
+
+The editor customizes length, gap, thickness, opacity, position offset, full RGB color, center dot, outline, and visibility. Sliders and typed number boxes stay synced, so you can drag quickly or enter exact values.
 
 The preset dropdown applies complete crosshair styles, including shape, opacity, RGB color, dot, outline, and offset. Settings are saved automatically.
 

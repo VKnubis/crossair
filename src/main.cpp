@@ -28,7 +28,7 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kUpdateCheckCompleteMessage = WM_APP + 2;
 
-constexpr const wchar_t* kAppVersion = L"v1.0.0";
+constexpr const wchar_t* kAppVersion = L"v1.0.1";
 constexpr const wchar_t* kReleasesUrl = L"https://github.com/VKnubis/crossair/releases";
 constexpr const wchar_t* kLatestReleaseApiUrl = L"https://api.github.com/repos/VKnubis/crossair/releases/latest";
 constexpr const wchar_t* kTagsApiUrl = L"https://api.github.com/repos/VKnubis/crossair/tags";
@@ -46,6 +46,7 @@ constexpr int kMaxOffset = 200;
 
 constexpr int kSettingsClientWidth = 620;
 constexpr int kSettingsClientHeight = 680;
+constexpr int kSettingsOverlayMargin = 24;
 
 constexpr COLORREF kSettingsBackground = RGB(18, 20, 24);
 constexpr COLORREF kSettingsPanel = RGB(28, 31, 37);
@@ -167,6 +168,7 @@ HWND g_settingsWindow = nullptr;
 HWND g_previewWindow = nullptr;
 SettingsControls g_controls;
 CrosshairSettings g_settings;
+POINT g_settingsOrigin{0, 0};
 bool g_updatingControls = false;
 bool g_updateCheckRunning = false;
 
@@ -707,6 +709,69 @@ void DrawPreview(HWND hwnd, HDC hdc) {
     DrawPreviewPanel(hdc, rect);
 }
 
+RECT SettingsPanelRect(HWND hwnd) {
+    RECT client{};
+    GetClientRect(hwnd, &client);
+
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    const int width = std::min(kSettingsClientWidth, std::max(320, clientWidth - (kSettingsOverlayMargin * 2)));
+    const int height = std::min(kSettingsClientHeight, std::max(360, clientHeight - (kSettingsOverlayMargin * 2)));
+    const int left = std::max(kSettingsOverlayMargin, (clientWidth - width) / 2);
+    const int top = std::max(kSettingsOverlayMargin, (clientHeight - height) / 2);
+
+    return {left, top, left + width, top + height};
+}
+
+void UpdateSettingsOrigin(HWND hwnd) {
+    const RECT panel = SettingsPanelRect(hwnd);
+    g_settingsOrigin = {panel.left, panel.top};
+}
+
+void MoveControl(HWND control, int x, int y, int width, int height) {
+    if (!control) {
+        return;
+    }
+
+    SetWindowPos(
+        control,
+        nullptr,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void LayoutSettingsControls() {
+    if (!g_settingsWindow) {
+        return;
+    }
+
+    UpdateSettingsOrigin(g_settingsWindow);
+
+    MoveControl(g_controls.presetCombo, 112, 232, 260, 220);
+    MoveControl(g_controls.lengthTrack, 122, 282, 316, 28);
+    MoveControl(g_controls.lengthEdit, 462, 283, 64, 24);
+    MoveControl(g_controls.gapTrack, 122, 320, 316, 28);
+    MoveControl(g_controls.gapEdit, 462, 321, 64, 24);
+    MoveControl(g_controls.thicknessTrack, 122, 358, 316, 28);
+    MoveControl(g_controls.thicknessEdit, 462, 359, 64, 24);
+    MoveControl(g_controls.opacityTrack, 122, 396, 316, 28);
+    MoveControl(g_controls.opacityEdit, 462, 397, 64, 24);
+    MoveControl(g_controls.offsetXTrack, 122, 434, 316, 28);
+    MoveControl(g_controls.offsetXEdit, 462, 435, 64, 24);
+    MoveControl(g_controls.offsetYTrack, 122, 472, 316, 28);
+    MoveControl(g_controls.offsetYEdit, 462, 473, 64, 24);
+    MoveControl(g_controls.redEdit, 142, 520, 52, 24);
+    MoveControl(g_controls.greenEdit, 228, 520, 52, 24);
+    MoveControl(g_controls.blueEdit, 314, 520, 52, 24);
+    MoveControl(g_controls.colorSwatch, 386, 520, 140, 24);
+    MoveControl(g_controls.dotCheck, 24, 572, 180, 24);
+    MoveControl(g_controls.outlineCheck, 160, 572, 180, 24);
+    MoveControl(g_controls.visibleCheck, 300, 572, 180, 24);
+}
+
 void RedrawOverlay(HWND hwnd) {
     if (!hwnd) {
         return;
@@ -810,8 +875,8 @@ HWND CreateLabel(HWND parent, const wchar_t* text, int x, int y, int width, int 
         L"STATIC",
         text,
         WS_CHILD | WS_VISIBLE,
-        x,
-        y,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
         width,
         height,
         parent,
@@ -828,8 +893,8 @@ HWND CreateEditBox(HWND parent, ControlId id, int x, int y, int width = 64) {
         L"EDIT",
         L"",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_RIGHT,
-        x,
-        y,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
         width,
         24,
         parent,
@@ -846,8 +911,8 @@ HWND CreateTrackbar(HWND parent, ControlId id, int x, int y, int minValue, int m
         TRACKBAR_CLASSW,
         L"",
         WS_CHILD | WS_VISIBLE | TBS_NOTICKS,
-        x,
-        y,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
         316,
         28,
         parent,
@@ -865,8 +930,8 @@ HWND CreateCheckbox(HWND parent, ControlId id, const wchar_t* text, int x, int y
         L"BUTTON",
         text,
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        x,
-        y,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
         180,
         24,
         parent,
@@ -883,8 +948,8 @@ HWND CreateButton(HWND parent, ControlId id, const wchar_t* text, int x, int y, 
         L"BUTTON",
         text,
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        x,
-        y,
+        g_settingsOrigin.x + x,
+        g_settingsOrigin.y + y,
         width,
         30,
         parent,
@@ -971,8 +1036,8 @@ void CreateSettingsControls(HWND hwnd) {
         L"COMBOBOX",
         L"",
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
-        112,
-        232,
+        g_settingsOrigin.x + 112,
+        g_settingsOrigin.y + 232,
         260,
         220,
         hwnd,
@@ -1034,8 +1099,8 @@ void CreateSettingsControls(HWND hwnd) {
         L"STATIC",
         L"",
         WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
-        386,
-        520,
+        g_settingsOrigin.x + 386,
+        g_settingsOrigin.y + 520,
         140,
         24,
         hwnd,
@@ -1244,12 +1309,17 @@ void DrawColorSwatch(const DRAWITEMSTRUCT& item) {
 void DrawSettingsChrome(HWND hwnd, HDC hdc) {
     RECT client{};
     GetClientRect(hwnd, &client);
-    FillRect(hdc, &client, g_settingsBackgroundBrush);
+    HBRUSH transparentBrush = CreateSolidBrush(kTransparentColor);
+    FillRect(hdc, &client, transparentBrush);
+    DeleteObject(transparentBrush);
 
-    RECT header{0, 0, client.right, 58};
+    const RECT panel = SettingsPanelRect(hwnd);
+    FillRect(hdc, &panel, g_settingsBackgroundBrush);
+
+    RECT header{panel.left, panel.top, panel.right, panel.top + 58};
     FillRect(hdc, &header, g_settingsPanelBrush);
 
-    RECT accent{0, 0, 6, 58};
+    RECT accent{panel.left, panel.top, panel.left + 6, panel.top + 58};
     HBRUSH accentBrush = CreateSolidBrush(CurrentColor());
     FillRect(hdc, &accent, accentBrush);
     DeleteObject(accentBrush);
@@ -1258,28 +1328,28 @@ void DrawSettingsChrome(HWND hwnd, HDC hdc) {
     SelectObject(hdc, UiFont());
 
     const std::wstring titleText = std::wstring(L"Crosshair Studio ") + kAppVersion;
-    RECT title{24, 12, client.right - 24, 34};
+    RECT title{panel.left + 24, panel.top + 12, panel.right - 24, panel.top + 34};
     SetTextColor(hdc, kSettingsText);
     DrawTextW(hdc, titleText.c_str(), -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT subtitle{24, 34, client.right - 24, 54};
+    RECT subtitle{panel.left + 24, panel.top + 34, panel.right - 24, panel.top + 54};
     SetTextColor(hdc, kSettingsMutedText);
-    DrawTextW(hdc, L"Presets, exact values, full RGB", -1, &subtitle, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    DrawTextW(hdc, L"Overlay editor - Esc to close", -1, &subtitle, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT preview{24, 72, client.right - 24, 214};
+    RECT preview{panel.left + 24, panel.top + 72, panel.right - 24, panel.top + 214};
     DrawPreviewPanel(hdc, preview);
 
-    RECT shapePanel{16, 224, client.right - 16, 558};
+    RECT shapePanel{panel.left + 16, panel.top + 224, panel.right - 16, panel.top + 558};
     FillRect(hdc, &shapePanel, g_settingsPanelBrush);
 
-    RECT optionsPanel{16, 562, client.right - 16, 648};
+    RECT optionsPanel{panel.left + 16, panel.top + 562, panel.right - 16, panel.top + 648};
     FillRect(hdc, &optionsPanel, g_settingsPanelBrush);
 
-    RECT shapeLabel{24, 258, 220, 278};
+    RECT shapeLabel{panel.left + 24, panel.top + 258, panel.left + 220, panel.top + 278};
     SetTextColor(hdc, kSettingsMutedText);
     DrawTextW(hdc, L"Shape", -1, &shapeLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    RECT colorLabel{24, 498, 220, 518};
+    RECT colorLabel{panel.left + 24, panel.top + 498, panel.left + 220, panel.top + 518};
     DrawTextW(hdc, L"Color", -1, &colorLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 }
 
@@ -1360,26 +1430,23 @@ bool RegisterWindowClasses() {
     return true;
 }
 
-void CenterWindowOnScreen(HWND hwnd) {
-    RECT rect{};
-    GetWindowRect(hwnd, &rect);
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
-
-    RECT workArea{};
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-
-    const int x = workArea.left + ((workArea.right - workArea.left - width) / 2);
-    const int y = workArea.top + ((workArea.bottom - workArea.top - height) / 2);
-    SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
-}
-
 void ShowSettingsWindow() {
+    RECT screen = VirtualScreenRect();
+
     if (g_settingsWindow) {
         ShowWindow(g_settingsWindow, SW_SHOW);
-        SetWindowPos(g_settingsWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(
+            g_settingsWindow,
+            HWND_TOPMOST,
+            screen.left,
+            screen.top,
+            screen.right - screen.left,
+            screen.bottom - screen.top,
+            SWP_SHOWWINDOW);
         SetForegroundWindow(g_settingsWindow);
+        LayoutSettingsControls();
         UpdateSettingsControls();
+        InvalidateRect(g_settingsWindow, nullptr, TRUE);
         return;
     }
 
@@ -1388,19 +1455,18 @@ void ShowSettingsWindow() {
         return;
     }
 
-    constexpr DWORD settingsStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    RECT rect{0, 0, kSettingsClientWidth, kSettingsClientHeight};
-    AdjustWindowRectEx(&rect, settingsStyle, FALSE, WS_EX_APPWINDOW | WS_EX_TOPMOST);
+    constexpr DWORD settingsStyle = WS_POPUP | WS_CLIPCHILDREN;
+    constexpr DWORD settingsExStyle = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW;
 
     g_settingsWindow = CreateWindowExW(
-        WS_EX_APPWINDOW | WS_EX_TOPMOST,
+        settingsExStyle,
         L"CppCrosshairSettingsWindow",
-        L"Crosshair Settings",
+        L"Crosshair Overlay",
         settingsStyle,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
+        screen.left,
+        screen.top,
+        screen.right - screen.left,
+        screen.bottom - screen.top,
         nullptr,
         nullptr,
         g_instance,
@@ -1411,10 +1477,17 @@ void ShowSettingsWindow() {
         return;
     }
 
-    CenterWindowOnScreen(g_settingsWindow);
+    SetLayeredWindowAttributes(g_settingsWindow, kTransparentColor, 255, LWA_COLORKEY);
     UpdateSettingsControls();
     ShowWindow(g_settingsWindow, SW_SHOW);
-    SetWindowPos(g_settingsWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(
+        g_settingsWindow,
+        HWND_TOPMOST,
+        screen.left,
+        screen.top,
+        screen.right - screen.left,
+        screen.bottom - screen.top,
+        SWP_SHOWWINDOW);
     SetForegroundWindow(g_settingsWindow);
     UpdateWindow(g_settingsWindow);
 }
@@ -1512,6 +1585,7 @@ LRESULT CALLBACK PreviewProc(HWND hwnd, UINT message, WPARAM, LPARAM) {
 LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
+        UpdateSettingsOrigin(hwnd);
         CreateSettingsControls(hwnd);
         return 0;
 
@@ -1547,6 +1621,18 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 
     case WM_ERASEBKGND:
         return 1;
+
+    case WM_SIZE:
+        LayoutSettingsControls();
+        InvalidateRect(hwnd, nullptr, TRUE);
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
 
     case WM_HSCROLL:
         ApplyTrackbarValue(reinterpret_cast<HWND>(lParam));
