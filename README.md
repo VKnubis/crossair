@@ -2,70 +2,52 @@
 
 A small Windows crosshair overlay written in C++ with the Win32 API.
 
-Current app version: `v1.0.1`.
+Current app version: `v1.1.0`.
 
 ## Build
 
-Easiest option:
+Build with the provided PowerShell script:
 
 ```powershell
 .\build.ps1
 ```
 
-The helper uses CMake, MSVC, or MinGW if one is installed.
-
-Manual CMake build:
+This compiles using the bundled LLVM MinGW toolchain and produces:
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Release
+.\dist\crosshair.exe       # 64-bit executable
+.\dist\crosshair-x86.exe   # 32-bit executable (optional fallback)
 ```
 
-Run it with:
-
-```powershell
-.\build\Release\crosshair.exe
-```
-
-If your CMake generator does not use `Release` folders, the executable may be at:
-
-```powershell
-.\build\crosshair.exe
-```
-
-The direct MSVC helper output is:
-
-```powershell
-.\build\msvc\crosshair.exe
-```
-
-The direct MinGW helper output is:
-
-```powershell
-.\build\mingw\crosshair.exe
-```
-
-This workspace also contains a portable build output after running the helper:
+Run the 64-bit version:
 
 ```powershell
 .\dist\crosshair.exe
 ```
 
-Use `crosshair.exe` for normal 64-bit Windows. If `crosshair-x86.exe` exists, keep it only as a fallback for 32-bit Windows.
-
 ## Controls
 
-- `Ctrl+Alt+S` opens the fullscreen overlay editor.
+- `Ctrl+Alt+S` opens the settings editor (can be customized)
+- `Ctrl+Alt+H` closes the settings editor (can be customized)
+-`Ctrl+Alt+S+f12` for fall back opener
+- `Esc` also closes the editor
+- Right-click the tray icon for menu options (Toggle, Longer, Shorter, Color Cycle, Help, Exit)
 
-The overlay editor appears as a borderless topmost HUD with a transparent black backdrop, rounded floating panels, and rounded action buttons spread across the screen, closer to a Steam/Xbox-style overlay than a normal app window. Drag a panel background to move it. Press `Esc` or `Hide` to close the editor, or use `Exit` to close the whole app.
+The settings editor displays as a fullscreen overlay with draggable panels for Settings, Presets, Shape, Color, Options, and Actions. You can customize:
 
-The editor customizes length, gap, thickness, opacity, position offset, full RGB color, center dot, outline, and visibility. Sliders and typed number boxes stay synced, so you can drag quickly or enter exact values.
+- **Length**: 4-80 pixels
+- **Gap**: 0-40 pixels
+- **Thickness**: 1-10 pixels
+- **Opacity**: 30-100%
+- **Position Offset**: -200 to +200 pixels (X and Y)
+- **Color**: Full RGB control
+- **Center Dot**: Toggle on/off
+- **Outline**: Toggle on/off
+- **Visibility**: Toggle on/off
 
-The preset dropdown applies complete crosshair styles, including shape, opacity, RGB color, dot, outline, and offset. Settings are saved automatically.
+Sliders and input fields stay synced—drag for quick adjustments or enter exact values. Drag any panel by its background to reposition it.
 
-Use `Save preset` to store the current crosshair as a custom preset. Select a custom preset and use `Remove` to delete it.
-
-You can also right-click the tray icon for common actions and exit.
+**Custom Presets**: Save your current crosshair settings as a preset using the "Save preset" button. Select and apply saved presets from the dropdown, or remove them with the "Remove" button. Settings persist automatically.
 
 ## Updates
 

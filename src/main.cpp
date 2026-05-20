@@ -30,7 +30,7 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kUpdateCheckCompleteMessage = WM_APP + 2;
 
-constexpr const wchar_t* kAppVersion = L"v1.1.1";
+constexpr const wchar_t* kAppVersion = L"v1.1.0";
 constexpr const wchar_t* kReleasesUrl = L"https://github.com/VKnubis/crossair/releases";
 constexpr const wchar_t* kLatestReleaseApiUrl = L"https://api.github.com/repos/VKnubis/crossair/releases/latest";
 constexpr const wchar_t* kTagsApiUrl = L"https://api.github.com/repos/VKnubis/crossair/tags";
